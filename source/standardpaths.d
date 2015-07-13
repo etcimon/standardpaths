@@ -671,7 +671,7 @@ version(Windows) {
                     return null;
                 }
             } catch(Exception e) {
-                debug(standardpaths) stderr.writeln(e.msg);
+               // debug(standardpaths) stderr.writeln(e.msg);
                 return null;
             }
         }
