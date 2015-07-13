@@ -1,7 +1,11 @@
 /**
  * Functions for retrieving standard paths in cross-platform manner.
- * 
- * License: $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
+ * Authors: 
+ *  $(LINK2 https://github.com/MyLittleRobo, Roman Chistokhodov)
+ * License: 
+ *  $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
+ * Copyright:
+ *  Roman Chistokhodov 2015
  */
 
 module standardpaths;
@@ -11,30 +15,37 @@ private {
     import std.array;
     import std.path;
     import std.file;
-    import std.algorithm : splitter;
+    import std.algorithm : splitter, canFind;
+    import std.exception;
+    import std.range;
     
-    debug(standardpaths) {
+    debug {
         import std.stdio : stderr;
     }
+    
+    static if( __VERSION__ < 2066 ) enum nogc = 1;
 }
 
 version(Windows) {
     private {
         import std.c.windows.windows;
         import std.utf;
-        import std.algorithm : canFind;
         import std.uni : toLower, sicmp;
-    }
-} else version(OSX) {
-    private {
-        //what to import?
     }
 } else version(Posix) {
     private {
         import std.stdio : File, StdioException;
-        import std.exception : assumeUnique, assumeWontThrow;
         import std.conv : octal;
         import std.string : toStringz;
+        
+        static if (is(typeof({import std.string : fromStringz;}))) {
+            import std.string : fromStringz;
+        } else { //own fromStringz implementation for compatibility reasons
+            import std.c.string : strlen;
+            @system pure inout(char)[] fromStringz(inout(char)* cString) {
+                return cString ? cString[0..strlen(cString)] : null;
+            }
+        }
     }
 } else {
     static assert(false, "Unsupported platform");
@@ -49,53 +60,70 @@ enum StandardPath {
     /**
      * Location of persisted application data.
      */
-    Data, 
+    data,
+    Data = StandardPath.data, 
     /**
      * Location of configuration files.
      * Note: on Windows it's the same as $(B Data) path.
      */
-    Config, 
+    config,
+    Config = StandardPath.config, 
     /**
      * Location of cached data.
      * Note: on Windows it's the same as $(B Data)/cache.
      */
-    Cache,  
-    Desktop, ///User's desktop directory
-    Documents, ///User's documents
-    Pictures, ///User's pictures
-    Music, ///User's music
-    Videos, ///User's videos (movies)
+    cache,
+    Cache = StandardPath.cache,  
+    ///User's desktop directory
+    desktop,
+    Desktop = StandardPath.desktop,
+    ///User's documents
+    documents,
+    Documents = StandardPath.documents,
+    ///User's pictures
+    pictures,
+    Pictures = StandardPath.pictures, 
     
-    /**
-     * Directory for user's downloaded files.
-     * Note: currently always return null on Windows.
-     */
-    Download, 
-    Templates, ///Location of templates.
+    ///User's music
+    music,
+    Music = StandardPath.music, 
     
-    /**
-     * Public share folder.
-     * Note: available only on systems with xdg-user-dirs (Linux, FreeBSD)
-     */
-    PublicShare, 
+    ///User's videos (movies)
+    videos,
+    Videos = StandardPath.videos, 
+    
+    ///Directory for user's downloaded files.
+    downloads,
+    Download = StandardPath.downloads, 
+    
+    ///Location of templates.
+    templates,
+    Templates = templates, 
+    
+    ///Public share folder.
+    publicShare,
+    PublicShare = StandardPath.publicShare, 
     /**
      * Location of fonts files.
-     * Note: don't relie on this on freedesktop. Better consider using $(LINK2 http://www.freedesktop.org/wiki/Software/fontconfig/, fontconfig library)
+     * Note: don't rely on this on freedesktop, since it uses hardcoded paths there. Better consider using $(LINK2 http://www.freedesktop.org/wiki/Software/fontconfig/, fontconfig library)
      */
-    Fonts, 
-    Applications, ///User's applications.
+    fonts,
+    Fonts = StandardPath.fonts, 
+    ///User's applications.
+    applications,
+    Applications = StandardPath.applications, 
 }
 
 /**
- * Returns: path to user home directory, or an empty string if could not determine home directory.
+ * Current user home directory.
+ * Returns: Path to user home directory, or an empty string if could not determine home directory.
  * Relies on environment variables.
- * Note: this function does not provide caching of its result.
+ * Note: This function does not cache its result.
  */
 string homeDir() nothrow @safe
 {
-    version(Windows) {
-        try { //environment.get may throw on Windows
-            
+    try {
+        version(Windows) {
             //Use GetUserProfileDirectoryW from Userenv.dll?
             string home = environment.get("USERPROFILE");
             if (home.empty) {
@@ -106,34 +134,94 @@ string homeDir() nothrow @safe
                 }
             }
             return home;
+        } else {
+            string home = environment.get("HOME");
+            return home;
         }
-        catch(Exception e) {
-            debug(standardpaths) stderr.writeln(e.msg);
-            return null;
-        }
-    } else {
-        string home = assumeWontThrow(environment.get("HOME"));
-        return home;
     }
-    
+    catch (Exception e) {
+        debug {
+            @trusted void writeException(Exception e) nothrow {
+                collectException(stderr.writefln("Error when getting home directory %s", e.msg));
+            }
+            writeException(e);
+        }
+        return null;
+    }
 }
 
 /**
- * Returns: path where files of $(U type) should be written to by current user, or an empty string if could not determine path.
+ * Getting writable paths for various locations.
+ * Returns: Path where files of $(U type) should be written to by current user, or an empty string if could not determine path.
  * This function does not ensure if the returned path exists and appears to be accessible directory.
- * Note: this function does not provide caching of its results.
+ * Note: This function does not cache its results.
  */
 string writablePath(StandardPath type) nothrow @safe;
 
 /**
- * Returns: array of paths where files of $(U type) belong including one returned by $(B writablePath), or an empty array if no paths are defined for $(U type).
- * This function does not ensure if all returned paths exist and appear to be accessible directories.
- * Note: this function does not provide caching of its results. Also returned strings are not required to be unique.
+ * Getting paths for various locations.
+ * Returns: Array of paths where files of $(U type) belong including one returned by $(B writablePath), or an empty array if no paths are defined for $(U type).
+ * This function does not ensure if all returned paths exist and appear to be accessible directories. Returned strings are not required to be unique.
+ * Note: This function does cache its results. 
  * It may cause performance impact to call this function often since retrieving some paths can be relatively expensive operation.
  * See_Also:
  *  writablePath
  */
 string[] standardPaths(StandardPath type) nothrow @safe;
+
+
+version(Docs)
+{
+    /**
+     * Path to runtime user directory.
+     * Returns: User's runtime directory determined by $(B XDG_RUNTIME_DIR) environment variable. 
+     * If directory does not exist it tries to create one with appropriate permissions. On fail returns an empty string.
+     * Note: This function is Freedesktop only.
+     */
+    string runtimeDir() nothrow @trusted;
+    
+    /**
+     * Path to $(B Roaming) data directory. 
+     * Returns: User's Roaming directory. On fail returns an empty string.
+     * Note: This function is Windows only.
+     */
+    string roamingPath() nothrow @safe;
+    
+    /**
+     * The preference-ordered set of base directories to search for configuration files.
+     * Returns: config directories, without user's one.
+     * Note: This function is Freedesktop only.
+     */
+    string[] xdgConfigDirs() nothrow @trusted;
+    
+    /**
+     * The preference-ordered set of base directories to search for data files.
+     * Returns: data directories, without user's one.
+     * Note: This function is Freedesktop only.
+     */
+    string[] xdgDataDirs() nothrow @trusted;
+    
+    /**
+     * The base directory relative to which user specific data files should be stored.
+     * Returns:  the same value as standardPaths(StandardPath.data)
+     * Note: This function is Freedesktop only.
+     */
+    string xdgDataHome() nothrow @trusted;
+    
+    /**
+     * The base directory relative to which user specific configuration files should be stored.
+     * Returns: the same value as standardPaths(StandardPath.config)
+     * Note: This function is Freedesktop only.
+     */
+    string xdgConfigHome() nothrow @trusted;
+    
+    /**
+     * The base directory relative to which user specific non-essential data files should be stored.
+     * Returns: the same value as standardPaths(StandardPath.cache)
+     * Note: This function is Freedesktop only.
+     */
+    string xdgCacheHome() nothrow @trusted;
+}
 
 version(Windows) {
     private enum pathVarSeparator = ';';
@@ -208,28 +296,80 @@ version(Windows) {
     }
     
     private  {
-        alias GetSpecialFolderPath = extern(Windows) BOOL function (HWND, wchar*, int, BOOL) nothrow @nogc @system;
+        private extern(Windows) @nogc @system BOOL dummy(HWND, wchar*, int, BOOL) nothrow { return 0; }
+        
+        alias typeof(&dummy) GetSpecialFolderPath;
         
         version(LinkedShell32) {
-            extern(Windows) BOOL SHGetSpecialFolderPathW(HWND, wchar*, int, BOOL) nothrow @nogc @system;
+            extern(Windows) @nogc @system BOOL SHGetSpecialFolderPathW(HWND, wchar*, int, BOOL) nothrow;
             __gshared GetSpecialFolderPath ptrSHGetSpecialFolderPath = &SHGetSpecialFolderPathW;
         } else {
             __gshared GetSpecialFolderPath ptrSHGetSpecialFolderPath = null;
         }
         
-        bool hasSHGetSpecialFolderPath() nothrow @nogc @trusted {
+        alias typeof(&RegOpenKeyExW) func_RegOpenKeyEx;
+        alias typeof(&RegQueryValueExW) func_RegQueryValueEx;
+        alias typeof(&RegCloseKey) func_RegCloseKey;
+
+        __gshared func_RegOpenKeyEx ptrRegOpenKeyEx;
+        __gshared func_RegQueryValueEx ptrRegQueryValueEx;
+        __gshared func_RegCloseKey ptrRegCloseKey;
+        
+        @nogc @trusted bool hasSHGetSpecialFolderPath() nothrow {
             return ptrSHGetSpecialFolderPath != null;
+        }
+        
+        @nogc @trusted bool isAdvApiLoaded() nothrow {
+            return ptrRegOpenKeyEx && ptrRegQueryValueEx && ptrRegCloseKey;
         }
     }
     
-    version(LinkedShell32) {} else {
-        shared static this() 
-        {
-            HMODULE lib = LoadLibraryA("Shell32");
-            if (lib) {
-                ptrSHGetSpecialFolderPath = cast(GetSpecialFolderPath)GetProcAddress(lib, "SHGetSpecialFolderPathW");
+    shared static this() 
+    {
+        version(LinkedShell32) {} else {
+            HMODULE shellLib = LoadLibraryA("Shell32");
+            if (shellLib) {
+                ptrSHGetSpecialFolderPath = cast(GetSpecialFolderPath)GetProcAddress(shellLib, "SHGetSpecialFolderPathW");
             }
         }
+        
+        HMODULE advApi = LoadLibraryA("Advapi32.dll");
+        if (advApi) {
+            ptrRegOpenKeyEx = cast(func_RegOpenKeyEx)GetProcAddress(advApi, "RegOpenKeyExW");
+            ptrRegQueryValueEx = cast(func_RegQueryValueEx)GetProcAddress(advApi, "RegQueryValueExW");
+            ptrRegCloseKey = cast(func_RegCloseKey)GetProcAddress(advApi, "RegCloseKey");
+        }
+    }
+    
+    private string getShellFolder(const(wchar)* key) nothrow @trusted
+    {
+        HKEY hKey;
+        if (isAdvApiLoaded()) {    
+            auto result = ptrRegOpenKeyEx(HKEY_CURRENT_USER, 
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders\0"w.ptr,
+                0,
+                KEY_QUERY_VALUE,
+                &hKey
+            );
+            scope(exit) ptrRegCloseKey(hKey);
+            
+            if (result == ERROR_SUCCESS) {
+                DWORD type;
+                BYTE[MAX_PATH*wchar.sizeof] buf = void;
+                DWORD length = cast(DWORD)buf.length;
+                result = ptrRegQueryValueEx(hKey, key, null, &type, buf.ptr, &length);
+                if (result == ERROR_SUCCESS && type == REG_SZ && (length % 2 == 0)) {
+                    auto str = cast(wstring)buf[0..length];
+                    try {
+                        return toUTF8(str);
+                    } catch(Exception e) {
+                        
+                    }
+                }
+            }
+        }
+        
+        return null;
     }
     
     
@@ -249,7 +389,6 @@ version(Windows) {
         return null;
     }
     
-    /// Path to $(B Roaming) data directory. This function is Windows only.
     string roamingPath() nothrow @safe
     {
         return getCSIDLFolder(CSIDL_APPDATA);
@@ -280,7 +419,7 @@ version(Windows) {
             case StandardPath.Videos:
                 return getCSIDLFolder(CSIDL_MYVIDEO);
             case StandardPath.Download:
-                return null;
+                return getShellFolder("{374DE290-123F-4565-9164-39C4925E467B}\0"w.ptr);
             case StandardPath.Templates:
                 return getCSIDLFolder(CSIDL_TEMPLATES);
             case StandardPath.PublicShare:
@@ -338,7 +477,7 @@ version(Windows) {
         return paths;
     }
     
-    private string[] executableExtensions() nothrow @trusted
+    private const(string)[] executableExtensions() nothrow @trusted
     {
         static bool filenamesEqual(string first, string second) nothrow {
             try {
@@ -348,40 +487,144 @@ version(Windows) {
             }
         }
         
-        string[] extensions;
-        try {
-            extensions = environment.get("PATHEXT").splitter(pathVarSeparator).array;
-            if (canFind!(filenamesEqual)(extensions, ".exe") == false) {
-                extensions = [];
-            }
-        } catch (Exception e) {
-            
-        }
+        static string[] extensions;
         if (extensions.empty) {
-            extensions = [".exe", ".com", ".bat", ".cmd"];
+            collectException(environment.get("PATHEXT").splitter(pathVarSeparator).array, extensions);
+            if (canFind!(filenamesEqual)(extensions, ".exe") == false) {
+                extensions = [".exe", ".com", ".bat", ".cmd"];
+            }
         }
+        
         return extensions;
     }
 } else version(OSX) {
     
+    private enum : short {
+        kOnSystemDisk                 = -32768L, /* previously was 0x8000 but that is an unsigned value whereas vRefNum is signed*/
+        kOnAppropriateDisk            = -32767, /* Generally, the same as kOnSystemDisk, but it's clearer that this isn't always the 'boot' disk.*/
+                                                /* Folder Domains - Carbon only.  The constants above can continue to be used, but the folder/volume returned will*/
+                                                /* be from one of the domains below.*/
+        kSystemDomain                 = -32766, /* Read-only system hierarchy.*/
+        kLocalDomain                  = -32765, /* All users of a single machine have access to these resources.*/
+        kNetworkDomain                = -32764, /* All users configured to use a common network server has access to these resources.*/
+        kUserDomain                   = -32763, /* Read/write. Resources that are private to the user.*/
+        kClassicDomain                = -32762, /* Domain referring to the currently configured Classic System Folder.  Not supported in Mac OS X Leopard and later.*/
+        kFolderManagerLastDomain      = -32760
+    }
+
+    private @nogc int k(string s) nothrow {
+        return s[0] << 24 | s[1] << 16 | s[2] << 8 | s[3];
+    }
+
+    private enum {
+        kDesktopFolderType            = k("desk"), /* the desktop folder; objects in this folder show on the desktop. */
+        kTrashFolderType              = k("trsh"), /* the trash folder; objects in this folder show up in the trash */
+        kWhereToEmptyTrashFolderType  = k("empt"), /* the "empty trash" folder; Finder starts empty from here down */
+        kFontsFolderType              = k("font"), /* Fonts go here */
+        kPreferencesFolderType        = k("pref"), /* preferences for applications go here */
+        kSystemPreferencesFolderType  = k("sprf"), /* the PreferencePanes folder, where Mac OS X Preference Panes go */
+        kTemporaryFolderType          = k("temp"), /*    On Mac OS X, each user has their own temporary items folder, and the Folder Manager attempts to set permissions of these*/
+                                                /*    folders such that other users can not access the data inside.  On Mac OS X 10.4 and later the data inside the temporary*/
+                                                /*    items folder is deleted at logout and at boot, but not otherwise.  Earlier version of Mac OS X would delete items inside*/
+                                                /*    the temporary items folder after a period of inaccess.  You can ask for a temporary item in a specific domain or on a */
+                                                /*    particular volume by FSVolumeRefNum.  If you want a location for temporary items for a short time, then use either*/
+                                                /*    ( kUserDomain, kkTemporaryFolderType ) or ( kSystemDomain, kTemporaryFolderType ).  The kUserDomain varient will always be*/
+                                                /*    on the same volume as the user's home folder, while the kSystemDomain version will be on the same volume as /var/tmp/ ( and*/
+                                                /*    will probably be on the local hard drive in case the user's home is a network volume ).  If you want a location for a temporary*/
+                                                /*    file or folder to use for saving a document, especially if you want to use FSpExchangeFile() to implement a safe-save, then*/
+                                                /*    ask for the temporary items folder on the same volume as the file you are safe saving.*/
+                                                /*    However, be prepared for a failure to find a temporary folder in any domain or on any volume.  Some volumes may not have*/
+                                                /*    a location for a temporary folder, or the permissions of the volume may be such that the Folder Manager can not return*/
+                                                /*    a temporary folder for the volume.*/
+                                                /*    If your application creates an item in a temporary items older you should delete that item as soon as it is not needed,*/
+                                                /*    and certainly before your application exits, since otherwise the item is consuming disk space until the user logs out or*/
+                                                /*    restarts.  Any items left inside a temporary items folder should be moved into a folder inside the Trash folder on the disk*/
+                                                /*    when the user logs in, inside a folder named "Recovered items", in case there is anything useful to the end user.*/
+        kChewableItemsFolderType      = k("flnt"), /* similar to kTemporaryItemsFolderType, except items in this folder are deleted at boot or when the disk is unmounted */
+        kTemporaryItemsInCacheDataFolderType = k("vtmp"), /* A folder inside the kCachedDataFolderType for the given domain which can be used for transient data*/
+        kApplicationsFolderType       = k("apps"), /*    Applications on Mac OS X are typically put in this folder ( or a subfolder ).*/
+        kVolumeRootFolderType         = k("root"), /* root folder of a volume or domain */
+        kDomainTopLevelFolderType     = k("dtop"), /* The top-level of a Folder domain, e.g. "/System"*/
+        kDomainLibraryFolderType      = k("dlib"), /* the Library subfolder of a particular domain*/
+        kUsersFolderType              = k("usrs"), /* "Users" folder, usually contains one folder for each user. */
+        kCurrentUserFolderType        = k("cusr"), /* The folder for the currently logged on user; domain passed in is ignored. */
+        kSharedUserDataFolderType     = k("sdat"), /* A Shared folder, readable & writeable by all users */
+        kCachedDataFolderType         = k("cach"), /* Contains various cache files for different clients*/
+        kDownloadsFolderType          = k("down"), /* Refers to the ~/Downloads folder*/
+        kApplicationSupportFolderType = k("asup"), /* third-party items and folders */
+
+
+        kDocumentsFolderType          = k("docs"), /*    User documents are typically put in this folder ( or a subfolder ).*/
+        kPictureDocumentsFolderType   = k("pdoc"), /* Refers to the "Pictures" folder in a users home directory*/
+        kMovieDocumentsFolderType     = k("mdoc"), /* Refers to the "Movies" folder in a users home directory*/
+        kMusicDocumentsFolderType     = 0xB5646F63/*'µdoc'*/, /* Refers to the "Music" folder in a users home directory*/
+        kInternetSitesFolderType      = k("site"), /* Refers to the "Sites" folder in a users home directory*/
+        kPublicFolderType             = k("pubb"), /* Refers to the "Public" folder in a users home directory*/
+
+        kDropBoxFolderType            = k("drop") /* Refers to the "Drop Box" folder inside the user's home directory*/
+    };
+
+    private {
+        struct FSRef {
+          char[80] hidden;    /* private to File Manager*/
+        };
+
+        alias int Boolean;
+        alias int OSType;
+        alias int OSerr;
+        
+        extern(C) @nogc @system int dummy(short, int, int, FSRef*) nothrow { return 0; }
+        extern(C) @nogc @system int dummy2(const(FSRef)*, char*, uint) nothrow { return 0; }
+
+        alias da_FSFindFolder = typeof(&dummy);
+        alias da_FSRefMakePath = typeof(&dummy2);
+
+        __gshared da_FSFindFolder ptrFSFindFolder = null;
+        __gshared da_FSRefMakePath ptrFSRefMakePath = null;
+    }
+
+    shared static this()
+    {
+        enum carbonPath = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/CarbonCore";
+
+        import core.sys.posix.dlfcn;
+
+        void* handle = dlopen(toStringz(carbonPath), RTLD_NOW | RTLD_LOCAL);
+        if (handle) {
+            ptrFSFindFolder = cast(da_FSFindFolder)dlsym(handle, "FSFindFolder");
+            ptrFSRefMakePath = cast(da_FSRefMakePath)dlsym(handle, "FSRefMakePath");
+        }
+        if (ptrFSFindFolder == null || ptrFSRefMakePath == null) {
+            debug collectException(stderr.writeln("Could not load carbon functions"));
+        }
+    }
+
+    @nogc @trusted bool isCarbonLoaded() nothrow
+    {
+        return ptrFSFindFolder != null && ptrFSRefMakePath != null;
+    }
+
+    enum noErr = 0;
+
     string fsPath(short domain, OSType type) nothrow @trusted
     {
-        import std.string : fromStringz;
-        
+        import std.stdio;   
         FSRef fsref;
-        OSErr err = FSFindFolder(domain, type, false, &fsref);
-        if (err) {
-            return null;
-        } else {
-            ubyte[2048] buf;
-            ubyte* path = buf.ptr;
-            if (FSRefMakePath(&fsref, path, path.sizeof) == noErr) {
-                auto cpath = cast(const(char)*)path;
-                return fromStringz(cpath).idup;
-            } else {
-                return null;
+        if (isCarbonLoaded() && ptrFSFindFolder(domain, type, false, &fsref) == noErr) {
+
+            char[2048] buf;
+            char* path = buf.ptr;
+            if (ptrFSRefMakePath(&fsref, path, buf.sizeof) == noErr) {
+                try {
+
+                    return fromStringz(path).idup;
+                }
+                catch(Exception e) {
+
+                }
             }
         }
+        return null;
     }
     
     string writablePath(StandardPath type) nothrow @safe
@@ -404,7 +647,7 @@ version(Windows) {
             case StandardPath.Videos:
                 return fsPath(kUserDomain, kMovieDocumentsFolderType);
             case StandardPath.Download:
-                return null;
+                return fsPath(kUserDomain, kDownloadsFolderType);
             case StandardPath.Templates:
                 return null;
             case StandardPath.PublicShare:
@@ -423,12 +666,18 @@ version(Windows) {
         switch(type) {
             case StandardPath.Fonts:
                 commonPath = fsPath(kOnAppropriateDisk, kFontsFolderType);
+                break;
             case StandardPath.Applications:
                 commonPath = fsPath(kOnAppropriateDisk, kApplicationsFolderType);
+                break;
             case StandardPath.Data:
                 commonPath = fsPath(kOnAppropriateDisk, kApplicationSupportFolderType);
+                break;
             case StandardPath.Cache:
                 commonPath = fsPath(kOnAppropriateDisk, kCachedDataFolderType);
+                break;
+            default:
+                break;
         }
         
         string[] paths;
@@ -448,15 +697,16 @@ version(Windows) {
         return start.empty ? null : start ~ path;
     }
     
-    private string xdgBaseDir(in char[] envvar, string fallback) nothrow @trusted {
-        string dir = assumeWontThrow(environment.get(envvar));
+    private string xdgBaseDir(string envvar, string fallback) nothrow @trusted {
+        string dir;
+        collectException(environment.get(envvar), dir);
         if (!dir.length) {
             dir = maybeConcat(homeDir(), fallback);
         }
         return dir;
     }
     
-    private string xdgUserDir(in char[] key, string fallback = null) nothrow @trusted {
+    private string xdgUserDir(string key, string fallback = null) nothrow @trusted {
         import std.algorithm : startsWith;
         import std.string : strip;
         
@@ -514,9 +764,9 @@ version(Windows) {
         return null;
     }
     
-    private string[] xdgConfigDirs() nothrow @trusted {
-        string configDirs = assumeWontThrow(environment.get("XDG_CONFIG_DIRS"));
+    string[] xdgConfigDirs() nothrow @trusted {
         try {
+            string configDirs = environment.get("XDG_CONFIG_DIRS");
             if (configDirs.length) {
                 return splitter(configDirs, pathVarSeparator).array;
             }
@@ -527,9 +777,9 @@ version(Windows) {
         return ["/etc/xdg"];
     }
     
-    private string[] xdgDataDirs() nothrow @trusted {
-        string dataDirs = assumeWontThrow(environment.get("XDG_DATA_DIRS"));
+    string[] xdgDataDirs() nothrow @trusted {
         try {
+            string dataDirs = environment.get("XDG_DATA_DIRS");
             if (dataDirs.length) {
                 return splitter(dataDirs, pathVarSeparator).array;
             }
@@ -539,100 +789,35 @@ version(Windows) {
         return ["/usr/local/share", "/usr/share"];
     }
     
-    
-    version(fontsconf) {
-        private string[] readFontsConfig(string configFile) nothrow @trusted
-        {
-            //Should be changed in future since std.xml is deprecated
-            import std.xml;
-            
-            string[] paths;
-            try {
-                string contents = cast(string)read(configFile);
-                check(contents);
-                auto parser = new DocumentParser(contents);
-                parser.onEndTag["dir"] = (in Element xml)
-                {
-                    string path = xml.text;
-                    
-                    if (path.length && path[0] == '~') {
-                        path = maybeConcat(homeDir(), path[1..$]);
-                    } else {
-                        const(string)* prefix = "prefix" in xml.tag.attr;
-                        if (prefix && *prefix == "xdg") {
-                            string dataPath = writablePath(StandardPath.Data);
-                            if (dataPath.length) {
-                                path = buildPath(dataPath, path);
-                            }
-                        }
-                    }
-                    if (path.length) {
-                        paths ~= path;
-                    }
-                };
-                parser.parse();
-            }
-            catch(Exception e) {
-                
-            }
-            return paths;
-        }
-        
-        private string[] fontPaths() nothrow @trusted
-        {
-            string[] paths;
-            
-            string homeConfig = homeFontsConfig();
-            if (homeConfig.length) {
-                paths ~= readFontsConfig(homeConfig);
-            }
-            
-            enum configs = ["/etc/fonts/fonts.conf", //path on linux
-                            "/usr/local/etc/fonts/fonts.conf"]; //path on freebsd
-            foreach(config; configs) {
-                paths ~= readFontsConfig(config);
-            }
-            return paths;
-        }
-        
-        private string homeFontsConfig() nothrow @trusted {
-            return maybeConcat(writablePath(StandardPath.Config), "/fontconfig/fonts.conf");
-        }
-        
-        private string homeFontsPath() nothrow @trusted {
-            string[] paths = readFontsConfig(homeFontsConfig());
-            if (paths.length)
-                return paths[0];
-            return null;
-        }
-        
-    } else {
-        private string homeFontsPath() nothrow @trusted {
-            return maybeConcat(homeDir(), "/.fonts");
-        }
-        
-        private string[] fontPaths() nothrow @trusted
-        {
-            enum localShare = "/usr/local/share/fonts";
-            enum share = "/usr/share/fonts";
-            
-            string homeFonts = homeFontsPath();
-            if (homeFonts.length) {
-                return [homeFonts, localShare, share];
-            } else {
-                return [localShare, share];
-            }
-        }
-        
+    string xdgDataHome() nothrow @trusted {
+        return xdgBaseDir("XDG_DATA_HOME", "/.local/share");
     }
     
+    string xdgConfigHome() nothrow @trusted {
+        return xdgBaseDir("XDG_CONFIG_HOME", "/.config");
+    }
     
+    string xdgCacheHome() nothrow @trusted {
+        return xdgBaseDir("XDG_CACHE_HOME", "/.cache");
+    }
     
-    /**
-     * Returns user's runtime directory determined by $(B XDG_RUNTIME_DIR) environment variable. 
-     * If directory does not exist it tries to create one with appropriate permissions. On fail returns an empty string.
-     * Note: this function is defined only on $(B Posix) systems (except for OS X)
-     */
+    private string homeFontsPath() nothrow @trusted {
+        return maybeConcat(homeDir(), "/.fonts");
+    }
+    
+    private string[] fontPaths() nothrow @trusted
+    {
+        enum localShare = "/usr/local/share/fonts";
+        enum share = "/usr/share/fonts";
+        
+        string homeFonts = homeFontsPath();
+        if (homeFonts.length) {
+            return [homeFonts, localShare, share];
+        } else {
+            return [localShare, share];
+        }
+    }
+    
     string runtimeDir() nothrow @trusted
     {
         // Do we need it on BSD systems?
@@ -644,60 +829,64 @@ version(Windows) {
         import core.stdc.errno;
         import core.stdc.string;
         
-        import std.string : fromStringz;
-        
-        const uid_t uid = getuid();
-        string runtime = assumeWontThrow(environment.get("XDG_RUNTIME_DIR"));
-        
-        mode_t runtimeMode = octal!700;
-        
-        if (!runtime.length) {
-            setpwent();
-            passwd* pw = getpwuid(uid);
-            endpwent();
+        try { //one try to rule them all and for compatibility reasons
+            const uid_t uid = getuid();
+            string runtime;
+            collectException(environment.get("XDG_RUNTIME_DIR"), runtime);
             
-            try {
-                if (pw && pw.pw_name) {
-                    runtime = tempDir() ~ "/runtime-" ~ assumeUnique(fromStringz(pw.pw_name));
-                    
-                    if (!(runtime.exists && runtime.isDir)) {
-                        if (mkdir(runtime.toStringz, runtimeMode) != 0) {
-                            debug(standardpaths) stderr.writefln("Failed to create runtime directory %s: %s", runtime, fromStringz(strerror(errno)));
-                            return null;
+            mode_t runtimeMode = octal!700;
+            
+            if (!runtime.length) {
+                setpwent();
+                passwd* pw = getpwuid(uid);
+                endpwent();
+                
+                try {
+                    if (pw && pw.pw_name) {
+                        runtime = tempDir() ~ "/runtime-" ~ assumeUnique(fromStringz(pw.pw_name));
+                        
+                        if (!(runtime.exists && runtime.isDir)) {
+                            if (mkdir(runtime.toStringz, runtimeMode) != 0) {
+                                debug stderr.writefln("Failed to create runtime directory %s: %s", runtime, fromStringz(strerror(errno)));
+                                return null;
+                            }
                         }
+                    } else {
+                        debug stderr.writeln("Failed to get user name to create runtime directory");
+                        return null;
                     }
-                } else {
-                    debug(standardpaths) stderr.writefln("Failed to get user name to create runtime directory");
+                } catch(Exception e) {
+                    debug collectException(stderr.writefln("Error when creating runtime directory: %s", e.msg));
                     return null;
                 }
-            } catch(Exception e) {
-               // debug(standardpaths) stderr.writeln(e.msg);
+            }
+            stat_t statbuf;
+            stat(runtime.toStringz, &statbuf);
+            if (statbuf.st_uid != uid) {
+                debug collectException(stderr.writeln("Wrong ownership of runtime directory %s, %d instead of %d", runtime, statbuf.st_uid, uid));
                 return null;
             }
-        }
-        stat_t statbuf;
-        stat(runtime.toStringz, &statbuf);
-        if (statbuf.st_uid != uid) {
-            debug(standardpaths) stderr.writefln("Wrong ownership of runtime directory %s, %d instead of %d", runtime, statbuf.st_uid, uid);
+            if ((statbuf.st_mode & octal!777) != runtimeMode) {
+                debug collectException(stderr.writefln("Wrong permissions on runtime directory %s, %o instead of %o", runtime, statbuf.st_mode, runtimeMode));
+                return null;
+            }
+            
+            return runtime;
+        } catch (Exception e) {
+            debug collectException(stderr.writeln("Error when getting runtime directory: %s", e.msg));
             return null;
         }
-        if ((statbuf.st_mode & octal!777) != runtimeMode) {
-            debug(standardpaths) stderr.writefln("Wrong permissions on runtime directory %s, %o instead of %o", runtime, statbuf.st_mode, runtimeMode);
-            return null;
-        }
-        
-        return runtime;
     }
     
     string writablePath(StandardPath type) nothrow @safe
     {
         final switch(type) {
             case StandardPath.Config:
-                return xdgBaseDir("XDG_CONFIG_HOME", "/.config");
+                return xdgConfigHome();
             case StandardPath.Cache:
-                return xdgBaseDir("XDG_CACHE_HOME", "/.cache");
+                return xdgCacheHome();
             case StandardPath.Data:
-                return xdgBaseDir("XDG_DATA_HOME", "/.local/share");
+                return xdgDataHome();
             case StandardPath.Desktop:
                 return xdgUserDir("DESKTOP", "/Desktop");
             case StandardPath.Documents:
@@ -794,34 +983,34 @@ private string checkExecutable(string filePath) nothrow @trusted {
 }
 
 /**
- * Finds executable by $(B fileName) in the paths specified by $(B paths).
- * Returns: absolute path to the existing executable file or an empty string if not found.
- * Params:
- *  fileName = name of executable to search
- *  paths = array of directories where executable should be searched. If not set, search in system paths, usually determined by PATH environment variable
- * Note: on Windows when fileName extension is omitted, executable extensions will be automatically appended during search.
+ * System paths where executable files can be found.
+ * Returns: Range of paths as determined by $(B PATH) environment variable.
+ * Note: this function does not cache its result
  */
-string findExecutable(string fileName, in string[] paths = []) nothrow @safe
+@trusted auto binPaths() nothrow
 {
+    string pathVar;
+    collectException(environment.get("PATH"), pathVar);
+    return splitter(pathVar, pathVarSeparator);
+}
+
+/**
+ * Finds executable by $(B fileName) in the paths specified by $(B paths).
+ * Returns: Absolute path to the existing executable file or an empty string if not found.
+ * Params:
+ *  fileName = Name of executable to search. If it's absolute path, this function only checks if the file is executable.
+ *  paths = Range of directories where executable should be searched.
+ * Note: On Windows when fileName extension is omitted, executable extensions will be automatically appended during search.
+ */
+@trusted nothrow string findExecutable(Range)(string fileName, Range paths) if (is(ElementType!Range : string))
+{   
     try {
         if (fileName.isAbsolute()) {
             return checkExecutable(fileName);
         }
         
-        const(string)[] searchPaths = paths;
-        if (searchPaths.empty) {
-            string pathVar = environment.get("PATH");
-            if (pathVar.length) {
-                searchPaths = splitter(pathVar, pathVarSeparator).array;
-            }
-        }
-        
-        if (searchPaths.empty) {
-            return null;
-        }
-        
         string toReturn;
-        foreach(string path; searchPaths) {
+        foreach(string path; paths) {
             string candidate = buildPath(absolutePath(path), fileName);
             
             version(Windows) {
@@ -846,4 +1035,10 @@ string findExecutable(string fileName, in string[] paths = []) nothrow @safe
     return null;
 }
 
-
+/**
+ * ditto, but searches in system paths, determined by $(B PATH) environment variable.
+ * See_Also: binPaths
+ */
+@safe string findExecutable(string fileName) nothrow {    
+    return findExecutable(fileName, binPaths());
+}

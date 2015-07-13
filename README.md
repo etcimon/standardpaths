@@ -2,16 +2,23 @@
 
 D library for getting standard paths (e.g. Pictures, Music, Documents). Inspired by QStandardPaths from Qt.
 
-The library is in early development. API may change in future. Join discussions in Issues if you're interested.
+[![Build Status](https://travis-ci.org/MyLittleRobo/standardpaths.svg?branch=master)](https://travis-ci.org/MyLittleRobo/standardpaths)
 
-## Compiler and platform support
+API may change in future. Join discussions in Issues if you're interested.
 
-The library requires at least DMD v2.066 (or other compatible compiler) to compile.
-Currently works on Windows, Linux and FreeBSD.
+## Platform support
+
+Currently works on Windows, Linux and FreeBSD. Mac OS X support is experimental.
 
 ## Generating documentation
 
+Ddoc:
+
     dub build --build=docs
+    
+Ddox:
+
+    dub build --build=ddox
     
 ## Import the library to your project
 
@@ -58,12 +65,14 @@ void showFileDialog()
     auto fileDialog = new FileDialog;
     string[] paths = [
         homeDir(),
-        writablePath(StandardPath.Desktop),
-        writablePath(StandardPath.Downloads),
-        writablePath(StandardPath.Documents),
-        writablePath(StandardPath.Pictures),
-        writablePath(StandardPath.Music),
-        writablePath(StandardPath.Video)
+        writablePath(StandardPath.desktop),
+        writablePath(StandardPath.downloads),
+        writablePath(StandardPath.documents),
+        writablePath(StandardPath.pictures),
+        writablePath(StandardPath.music),
+        writablePath(StandardPath.videos),
+        writablePath(StandardPath.templates),
+        writablePath(StandardPath.publicShare)
     ];
     foreach(path; paths) {
         if (path.exists) {
@@ -92,7 +101,7 @@ import std.path;
 
 void saveSettings(const Config config)
 {
-    string configPath = buildPath(writablePath(StandardPath.Config), organizationName, applicationName);
+    string configPath = buildPath(writablePath(StandardPath.config), organizationName, applicationName);
     if (!configPath.exists) {
         mkdir(configPath);
     }
@@ -111,11 +120,10 @@ Since one can save settings it also should be able to read them. Before the firs
 ```d
 Config readSettings()
 {
-    string[] configPaths = standardPaths(StandardPath.Config);
+    string[] configPaths = standardPaths(StandardPath.config).map!(s => buildPath(s, organizationName, applicationName, "config.conf")).array;
     configPaths ~= thisExePath().dirName(); //Optionally add root application directory to search files in
 
-    foreach(path; configPaths) {
-        string configFile = buildPath(path, organizationName, applicationName, "config.conf");
+    foreach(configFath; configPaths) {
         if (configFile.exists) {
             auto f = File(configFile, "r");
             Config config;
@@ -128,10 +136,14 @@ Config readSettings()
 
 ## Implementation details   
 
-### Posix
+### Freedesktop
 
-On Posix systems library uses [XDG Base Directory Specification](http://standards.freedesktop.org/basedir-spec/latest/index.html#introduction) and [xdg-user-dirs](http://www.freedesktop.org/wiki/Software/xdg-user-dirs/).
+On freedesktop systems (GNU/Linux, FreeBSD, etc.) library uses [XDG Base Directory Specification](http://standards.freedesktop.org/basedir-spec/latest/index.html#introduction) and also provides behavior similiar to [xdg-user-dirs](http://www.freedesktop.org/wiki/Software/xdg-user-dirs/).
 
 ### Windows
 
 On Windows it utilizes [SHGetSpecialFolderPath](https://msdn.microsoft.com/en-us/library/windows/desktop/bb762204(v=vs.85).aspx).
+
+### Mac OS X
+
+Uses FSFindFolder from Carbon framework. [See here](http://cocoadev.com/ApplicationSupportFolder).
