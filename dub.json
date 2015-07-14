@@ -12,7 +12,7 @@
             "name" : "default",
             "versions-windows":["LinkedShell32"],
             "versions-posix" : ["fontsconf"],
-            "platforms" : ["windows"]
+            "platforms" : ["windows"],
             "dflags-windows-x86": ["-m32mscoff"]
         }
     ],
