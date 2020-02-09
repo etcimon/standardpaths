@@ -17,6 +17,9 @@
         }
     ],
     
+	"dependencies": {
+		"windows-headers": { "version": "~>1.0.0" }
+    },
     "buildTypes" : {
         "docs" : {
             "buildOptions" : ["syntaxOnly"],

@@ -28,7 +28,8 @@ private {
 
 version(Windows) {
     private {
-        import std.c.windows.windows;
+        import windows.windows;
+        import windows.winreg;
         import std.utf;
         import std.uni : toLower, sicmp;
     }
@@ -419,7 +420,7 @@ version(Windows) {
             case StandardPath.Videos:
                 return getCSIDLFolder(CSIDL_MYVIDEO);
             case StandardPath.Download:
-                return getShellFolder("{374DE290-123F-4565-9164-39C4925E467B}\0"w.ptr);
+                return getShellFolder(&"{374DE290-123F-4565-9164-39C4925E467B}\x00"w[0]);
             case StandardPath.Templates:
                 return getCSIDLFolder(CSIDL_TEMPLATES);
             case StandardPath.PublicShare:
